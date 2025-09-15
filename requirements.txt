@@ -1,0 +1,7 @@
+yt-dlp
+python-vlc
+pynput
+pystray
+Pillow
+sv_ttk
+requests
