@@ -380,24 +380,39 @@ class PlayerApp:
             self.root.after(0, self._on_stream_info_error, e, idx)
 
     def _get_stream_info_blocking(self, url: str) -> Tuple[str, str]:
-        ydl_opts = dict(self.ydl_opts_common, format='bestaudio[ext=m4a]/bestaudio', skip_download=True)
+        """[會阻塞] 使用 yt-dlp 實際獲取音訊串流 URL，並增加重試機制"""
+        # 策略 1: 優先嘗試最常見且穩定的 m4a 格式
+        ydl_opts_primary = dict(self.ydl_opts_common, format='bestaudio[ext=m4a]/bestaudio', skip_download=True)
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            with yt_dlp.YoutubeDL(ydl_opts_primary) as ydl:
+                info = ydl.extract_info(url, download=False, process=False)
+                info = ydl.process_ie_result(info, download=False)
         except (YTDLExtractorError, YTDLDownloadError) as e:
-            LOG.warning("yt-dlp 在擷取 '%s' 的資訊時失敗: %s", url, e)
-            raise
+            LOG.warning("主要格式選擇器 (m4a) 失敗，原因: %s。正在嘗試備用策略...", e)
+            # 策略 2: 使用更寬鬆的格式選擇器重試
+            ydl_opts_fallback = dict(self.ydl_opts_common, format='bestaudio/best', skip_download=True)
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                    info = ydl.extract_info(url, download=False, process=False)
+                    info = ydl.process_ie_result(info, download=False)
+            except (YTDLExtractorError, YTDLDownloadError) as fallback_e:
+                LOG.error("備用格式選擇器也失敗了，原因: %s", fallback_e)
+                raise fallback_e from e # 將原始錯誤和備用錯誤都拋出
+        
         title = info.get('title', '無標題')
         stream_url = info.get('url')
+        
         if not stream_url:
             LOG.debug("在頂層找不到 url，正在從 formats 列表中搜尋備案...")
             for f in info.get('formats', []):
-                if f.get('url'):
+                if f.get('url') and f.get('acodec') != 'none':
                     stream_url = f['url']
-                    LOG.debug("從 format id %s 中找到串流 URL", f.get('format_id'))
+                    LOG.debug("從 format id '%s' 中找到備用串流 URL", f.get('format_id'))
                     break
+        
         if not stream_url:
             raise RuntimeError(f"無法為影片 '{title}' 找到任何有效的音訊串流 URL")
+            
         return title, stream_url
 
     def _on_stream_info_ready(self, title: str, stream_url: str, idx: int):
@@ -410,12 +425,22 @@ class PlayerApp:
     def _on_stream_info_error(self, error: Exception, idx: int):
         title = self.playlist_titles[idx]
         LOG.error("取得 '%s' 的串流失敗: %s", title, str(error))
-        if isinstance(error, (YTDLExtractorError, YTDLDownloadError)):
+        
+        # 只有在確定是影片本身的問題時才標記為不可用
+        error_msg = str(error).lower()
+        permanent_errors = [
+            "video unavailable", "private video", "no longer available",
+            "account associated with this video has been terminated",
+            "violating youtube's terms of service", "copyright"
+        ]
+        
+        if any(err in error_msg for err in permanent_errors):
             self.set_status(f"跳過不可用影片: {title}")
             self.unavailable_indices.add(idx)
             self._refresh_listbox()
         else:
             self.set_status(f"暫時無法播放，跳過: {title}")
+            
         self.root.after(200, lambda: self.play_next(start_idx=idx))
 
     def _start_play(self, stream_url: str):
