@@ -9,6 +9,7 @@ import sys
 import json
 import urllib.request
 from packaging.version import parse as parse_version
+import multiprocessing # 匯入 multiprocessing
 
 from app import PlayerApp
 from log_viewer import LogViewer, TkinterLogHandler
@@ -34,7 +35,8 @@ def check_for_yt_dlp_update(app_instance: PlayerApp):
             # 1. 獲取本地安裝的版本
             local_process = subprocess.run(
                 [sys.executable, "-m", "pip", "show", "yt-dlp"],
-                capture_output=True, text=True, check=True, encoding='utf-8'
+                capture_output=True, text=True, check=True, encoding='utf-8',
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
             local_version_str = ""
             for line in local_process.stdout.splitlines():
@@ -77,6 +79,9 @@ def check_for_yt_dlp_update(app_instance: PlayerApp):
     update_thread.start()
 
 if __name__ == "__main__":
+    # 針對 Windows 打包環境的關鍵修復
+    multiprocessing.freeze_support()
+
     root = tk.Tk()
     sv_ttk.set_theme("dark")
 
