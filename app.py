@@ -72,6 +72,7 @@ class PlayerApp:
         self.update_notification_frame: Optional[ttk.Frame] = None
         self.update_label: Optional[ttk.Label] = None
         self.update_button: Optional[ttk.Button] = None
+        self.top_control_frame: Optional[ttk.Frame] = None
         
         # --- 播放結束事件防抖 ---
         self._last_end_event_time = 0.0
@@ -115,19 +116,19 @@ class PlayerApp:
         s.configure('Warn.TButton', background='#ffc107', foreground='black')
 
         # --- 頂部控制列 ---
-        top_frame = ttk.Frame(self.root, padding=10)
-        top_frame.pack(fill=tk.X, side=tk.TOP)
-        # ... (其餘 UI 建立代碼與之前相同)
-        ttk.Label(top_frame, text="播放清單網址：", font=font_main).pack(side=tk.LEFT)
-        self.url_entry = ttk.Entry(top_frame, font=font_main)
+        self.top_control_frame = ttk.Frame(self.root, padding=10)
+        self.top_control_frame.pack(fill=tk.X, side=tk.TOP)
+        
+        ttk.Label(self.top_control_frame, text="播放清單網址：", font=font_main).pack(side=tk.LEFT)
+        self.url_entry = ttk.Entry(self.top_control_frame, font=font_main)
         self.url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.url_entry.bind("<FocusIn>", self._show_history_popup)
         self.url_entry.bind("<Button-1>", self._show_history_popup, add="+")
         
-        self.load_button = ttk.Button(top_frame, text="載入", command=self.load_playlist, style='TButton')
+        self.load_button = ttk.Button(self.top_control_frame, text="載入", command=self.load_playlist, style='TButton')
         self.load_button.pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="🔀 隨機", command=self.play_random, style='TButton').pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="▶ 播放/暫停", command=self.toggle_play, style='TButton').pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Button(self.top_control_frame, text="🔀 隨機", command=self.play_random, style='TButton').pack(side=tk.LEFT, padx=2)
+        ttk.Button(self.top_control_frame, text="▶ 播放/暫停", command=self.toggle_play, style='TButton').pack(side=tk.LEFT, padx=(2, 0))
 
         list_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         list_frame.pack(fill=tk.BOTH, expand=True)
@@ -150,8 +151,9 @@ class PlayerApp:
     # --- 更新機制 ---
     def show_update_notification(self):
         """顯示 yt-dlp 更新提示"""
-        if self.update_notification_frame:
-            self.update_notification_frame.pack(fill=tk.X, side=tk.TOP, before=self.root.winfo_children()[0])
+        if self.update_notification_frame and self.top_control_frame:
+            # 確保提示列顯示在最上方
+            self.update_notification_frame.pack(fill=tk.X, side=tk.TOP, before=self.top_control_frame)
 
     def _start_update(self):
         """開始更新流程"""
@@ -181,11 +183,13 @@ class PlayerApp:
     def _on_update_success(self):
         """更新成功後的 UI 回饋"""
         if self.update_label:
-            self.update_label.config(text="yt-dlp 更新成功！")
+            self.update_label.config(text="yt-dlp 更新成功！程式將在3秒後重新啟動以套用更新。")
         if self.update_button:
             self.update_button.pack_forget() # 移除按鈕
-        # 3秒後隱藏提示列
-        self.root.after(3000, lambda: self.update_notification_frame and self.update_notification_frame.pack_forget())
+        
+        # 提示使用者並準備重啟
+        LOG.info("yt-dlp 更新完畢，準備重啟應用程式...")
+        self.root.after(3000, self._restart_app)
 
     def _on_update_failure(self, error_message: str):
         """更新失敗後的 UI 回饋"""
@@ -193,7 +197,16 @@ class PlayerApp:
             self.update_label.config(text="更新失敗，請查看日誌詳情。")
         if self.update_button:
             self.update_button.config(state="normal") # 重新啟用按鈕
+            
+    def _restart_app(self):
+        """重新啟動應用程式"""
+        LOG.info("正在執行重啟...")
+        # 清理資源
+        self._quit_gracefully(restart=True)
         
+        # 執行新的 Python 程序
+        os.execv(sys.executable, ['python'] + sys.argv)
+
     # --- 事件與其他函式 ---
     def _handle_root_click(self, event):
         if self.history_popup:
@@ -496,11 +509,12 @@ class PlayerApp:
         LOG.info("索引 %s 播放完畢", self.current_idx)
         self.root.after(250, self.play_next)
 
-    def _quit_gracefully(self):
+    def _quit_gracefully(self, restart=False):
         LOG.info("正在關閉應用程式...")
         with suppress(Exception): 
             if self.vlc_player: self.vlc_player.stop()
         with suppress(Exception): self.async_worker.stop()
         with suppress(Exception): self.log_viewer.close()
-        self.root.destroy()
+        if not restart:
+            self.root.destroy()
 
